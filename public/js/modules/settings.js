@@ -56,6 +56,15 @@ const SHORTCUTS = (base) => [
     steps: [`GET ${base}/api/quick/agenda?format=text (o &date=YYYY-MM-DD) → «Leer texto».`],
     curl: `curl "${base}/api/quick/agenda?format=text" -H "Authorization: Bearer TU_TOKEN"`,
   },
+  {
+    title: '✅ "Oye Siri, apunta una tarea"',
+    steps: [
+      'Nuevo atajo «Apunta una tarea» → «Dictar texto» (p.ej. «mañana sacar la basura para Luis» o «el viernes a las 18:00 llamar al fontanero»).',
+      `«Obtener contenido de URL» POST ${base}/api/quick/task?format=text con JSON text = Texto dictado (opcional: assignee = nombre del responsable) → «Leer texto».`,
+      `Para que Siri lea lo pendiente: GET ${base}/api/quick/tasks-list?format=text (las tuyas) o añade &all=true (las de toda la casa) → «Leer texto».`,
+    ],
+    curl: `curl -X POST "${base}/api/quick/task?format=text" -H "Authorization: Bearer TU_TOKEN" -H "Content-Type: application/json" -d '{"text":"mañana sacar la basura","assignee":"Luis"}'`,
+  },
 ];
 
 export default {
