@@ -1,6 +1,6 @@
 # 🏠 FamilyPro
 
-Web para gestionar los temas de casa: **calendario familiar**, **lista de la compra**, **gastos** y **tareas del hogar**, con acceso por **token personal** y una **API de acciones rápidas** pensada para Atajos de iPhone, Siri y la automatización de Wallet.
+Web para gestionar los temas de casa: **calendario familiar**, **lista de la compra**, **gastos**, **tareas del hogar** y **menú semanal**, con acceso por **token personal** y una **API de acciones rápidas** pensada para Atajos de iPhone, Siri y la automatización de Wallet.
 
 Está construida por módulos: cada "app" (compra, gastos, calendario…) es un módulo independiente que se enchufa al núcleo, y el **calendario principal** junta lo que publique cada módulo, con filtros para ver todo o solo lo que elijas.
 
@@ -17,6 +17,7 @@ Está construida por módulos: cada "app" (compra, gastos, calendario…) es un 
 | 🛒 **Compra** | Varias listas (Supermercado, Farmacia…). Puedes añadir varias cosas de golpe ("leche, 2 huevos y pan"), detecta cantidades, no duplica lo que ya está pendiente, autocompleta con lo comprado antes, separa lo que ya está en el carro y se refresca sola cada 15 s. |
 | 💶 **Gastos** | Categorías con icono, color, presupuesto mensual y **palabras clave**: el comercio de Wallet se clasifica solo y la app aprende de tus correcciones. Resumen mensual por categoría y por persona, histórico de 6 meses, búsqueda y exportación a CSV. |
 | ✅ **Tareas** | Tareas del hogar con fecha límite (y hora opcional), prioridad, responsable y notas. Lista agrupada en Atrasadas, Hoy, Próximas, Sin fecha y Hechas recientes, filtro *Mías / Todas* y alta rápida con texto libre ("mañana sacar la basura para Luis"). **Tareas recurrentes** (diaria, semanal o mensual con intervalo) con **rotación** de responsables: al completarla, la fecha salta a la siguiente repetición y le toca al siguiente. Aparecen en el calendario principal y en el feed ICS. |
+| 🍽️ **Menú** | Planificación semanal (desayuno, comida, merienda y cena; por defecto se ven comida y cena) con navegación por semanas, y en el móvil una lista por días. Cada hueco lleva una receta o texto libre, notas y quién cocina. **Recetario** con raciones, enlace, etiquetas, preparación e ingredientes (una línea por ingrediente: "2 cebollas"). Un botón pasa los ingredientes de la semana a la lista de la compra sin duplicar lo pendiente, y otro copia la semana anterior en los huecos vacíos. Fuente "Menú" opcional en el calendario principal. |
 | ⚙️ **Ajustes** | Perfil, tokens (crear y revocar uno por dispositivo), miembros de la casa (solo administradores), URL de suscripción al calendario y guía de atajos con ejemplos `curl` listos para copiar. |
 
 ## Puesta en marcha
@@ -84,6 +85,10 @@ Todas están en `/api/quick/<acción>`. Aceptan **GET o POST** (JSON, formulario
 | `GET /api/quick/agenda` | `date` (opcional) | *Tienes 2: 09:00 ITV; 18:00 Natación.* |
 | `POST /api/quick/task` | `text` ("mañana a las 18:00 sacar la basura", admite "… para Luis" al final), `assignee` (nombre, opcional), `date`, `time`, `priority` (opcionales) | *Tarea "Sacar la basura" añadida para el sábado, 7 de noviembre a las 18:00 (Luis).* |
 | `GET /api/quick/tasks-list` | `all=true` (las de todos) o `assignee` (nombre); por defecto, las tuyas | *Tienes 2 tareas pendientes: Pagar el seguro (atrasada, 3 nov) y Fregar los platos (hoy).* |
+| `GET /api/quick/meal` | `date` o `text` ("mañana", "el viernes", "mañana cena"), `meal` (opcional) | *Hoy para comer hay Lentejas (cocina Ana) y para cenar Lasaña.* |
+| `POST /api/quick/meal-plan` | `text` ("mañana cena lasaña"), **o** `date` + `meal` (desayuno/comida/merienda/cena, por defecto cena) + `text`; `cook` (opcional) | *Mañana para cenar: Lasaña.* |
+
+Si el plato de `meal-plan` coincide con el nombre de una receta, se enlaza (así sus ingredientes pueden pasar a la compra).
 
 Los importes admiten `12,50 €`, `€12.50`, `1.234,56`… El texto libre de eventos entiende *hoy, mañana, pasado mañana, el viernes, 12/11, 15 de diciembre, a las 5, a las 17:30, a las 9 y media…*
 
@@ -138,6 +143,10 @@ GET    /api/quick                  lista de acciones rápidas disponibles
 /api/tasks         GET ?status=pending|done|all&mine=1&assignee=<id|none>&doneSince=YYYY-MM-DD · POST
 /api/tasks/:id     GET · PUT/PATCH {title,notes,dueDate,dueTime,priority,assigneeId,recurrence,recurrenceInterval,rotation,done} · DELETE
 /api/tasks/:id/complete · /:id/uncomplete (POST) · /:id/history (GET)
+/api/meals/recipes    GET ?q · POST {name,notes,servings,url,tags,ingredients} · GET/PUT/DELETE /:id
+/api/meals/plan       GET ?from&to · GET/PUT/DELETE /:date/:meal {recipeId|text,notes,cookId}
+/api/meals/plan/shopping   POST {from,to,listId?}  ingredientes de las recetas planificadas → lista de la compra
+/api/meals/plan/copy       POST {from,to,overwrite?}  copia 7 días desde from a los 7 días desde to
 ```
 
 **Tareas recurrentes:** una tarea recurrente es una sola fila que nunca queda "hecha". Al completarla se guarda el registro en el historial y su fecha límite avanza al siguiente múltiplo del intervalo posterior a hoy (si la semanal del lunes se completa el martes, la siguiente es el lunes siguiente; las mensuales del día 31 pasan al último día del mes). Si tiene rotación, el responsable pasa al siguiente de la lista. `uncomplete` deshace la última vez (restaura fecha y responsable). En el calendario solo aparece la próxima fecha pendiente.
@@ -189,7 +198,7 @@ npm test       # tests de la API (node:test)
 src/
   core/        app (montaje de módulos), auth (tokens), db (migraciones), bootstrap
   lib/         parseo de importes y texto, fechas en español, repeticiones, ICS
-  modules/     events · shopping · expenses · tasks
+  modules/     events · shopping · expenses · tasks · meals
 public/
   js/          app (router), api, ui, calendar-view, event-editor
   js/modules/  una página por módulo

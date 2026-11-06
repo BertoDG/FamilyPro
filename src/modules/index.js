@@ -4,5 +4,6 @@ import events from './events/index.js';
 import shopping from './shopping/index.js';
 import expenses from './expenses/index.js';
 import tasks from './tasks/index.js';
+import meals from './meals/index.js';
 
-export const modules = [events, shopping, expenses, tasks];
+export const modules = [events, shopping, expenses, tasks, meals];

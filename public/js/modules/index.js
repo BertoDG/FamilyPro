@@ -5,6 +5,7 @@ import events from './events.js';
 import shopping from './shopping.js';
 import expenses from './expenses.js';
 import tasks from './tasks.js';
+import meals from './meals.js';
 import settings from './settings.js';
 
-export const pages = [home, events, shopping, expenses, tasks, settings];
+export const pages = [home, events, shopping, expenses, tasks, meals, settings];
