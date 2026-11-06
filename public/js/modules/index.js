@@ -4,6 +4,7 @@ import home from './home.js';
 import events from './events.js';
 import shopping from './shopping.js';
 import expenses from './expenses.js';
+import meals from './meals.js';
 import settings from './settings.js';
 
-export const pages = [home, events, shopping, expenses, settings];
+export const pages = [home, events, shopping, expenses, meals, settings];

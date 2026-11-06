@@ -1,6 +1,6 @@
 # 🏠 FamilyPro
 
-Web para gestionar los temas de casa: **calendario familiar**, **lista de la compra** y **gastos**, con acceso por **token personal** y una **API de acciones rápidas** pensada para Atajos de iPhone, Siri y la automatización de Wallet.
+Web para gestionar los temas de casa: **calendario familiar**, **lista de la compra**, **gastos** y **menú semanal**, con acceso por **token personal** y una **API de acciones rápidas** pensada para Atajos de iPhone, Siri y la automatización de Wallet.
 
 Está construida por módulos: cada "app" (compra, gastos, calendario…) es un módulo independiente que se enchufa al núcleo, y el **calendario principal** junta lo que publique cada módulo, con filtros para ver todo o solo lo que elijas.
 
@@ -16,6 +16,7 @@ Está construida por módulos: cada "app" (compra, gastos, calendario…) es un 
 | 📅 **Calendario** | Vistas de mes, semana y agenda. Eventos de día completo o con hora, repeticiones (diaria, semanal, mensual o anual, con intervalo y fecha de fin), borrar solo una repetición o toda la serie, participantes, lugar y subcalendarios con color (Familia, Colegio, Médicos…). **Feed ICS** para suscribirse desde el Calendario del iPhone. |
 | 🛒 **Compra** | Varias listas (Supermercado, Farmacia…). Puedes añadir varias cosas de golpe ("leche, 2 huevos y pan"), detecta cantidades, no duplica lo que ya está pendiente, autocompleta con lo comprado antes, separa lo que ya está en el carro y se refresca sola cada 15 s. |
 | 💶 **Gastos** | Categorías con icono, color, presupuesto mensual y **palabras clave**: el comercio de Wallet se clasifica solo y la app aprende de tus correcciones. Resumen mensual por categoría y por persona, histórico de 6 meses, búsqueda y exportación a CSV. |
+| 🍽️ **Menú** | Planificación semanal (desayuno, comida, merienda y cena; por defecto se ven comida y cena) con navegación por semanas, y en el móvil una lista por días. Cada hueco lleva una receta o texto libre, notas y quién cocina. **Recetario** con raciones, enlace, etiquetas, preparación e ingredientes (una línea por ingrediente: "2 cebollas"). Un botón pasa los ingredientes de la semana a la lista de la compra sin duplicar lo pendiente, y otro copia la semana anterior en los huecos vacíos. Fuente "Menú" opcional en el calendario principal. |
 | ⚙️ **Ajustes** | Perfil, tokens (crear y revocar uno por dispositivo), miembros de la casa (solo administradores), URL de suscripción al calendario y guía de atajos con ejemplos `curl` listos para copiar. |
 
 ## Puesta en marcha
@@ -81,6 +82,10 @@ Todas están en `/api/quick/<acción>`. Aceptan **GET o POST** (JSON, formulario
 | `POST /api/quick/expense` | `amount`, `merchant`, `description`, `category`, `card`, `date`, `paidBy`, `source`, **o** `text` ("12,50 farmacia") | *Gasto de 12,50 € en Farmacia (Salud).* |
 | `POST /api/quick/event` | `text` ("mañana a las 17:30 dentista"), **o** `title` + `date` + `time` + `duration`; `calendar` (opcional) | *Evento "Dentista" creado para el sábado, 7 de noviembre a las 17:30.* |
 | `GET /api/quick/agenda` | `date` (opcional) | *Tienes 2: 09:00 ITV; 18:00 Natación.* |
+| `GET /api/quick/meal` | `date` o `text` ("mañana", "el viernes", "mañana cena"), `meal` (opcional) | *Hoy para comer hay Lentejas (cocina Ana) y para cenar Lasaña.* |
+| `POST /api/quick/meal-plan` | `text` ("mañana cena lasaña"), **o** `date` + `meal` (desayuno/comida/merienda/cena, por defecto cena) + `text`; `cook` (opcional) | *Mañana para cenar: Lasaña.* |
+
+Si el plato de `meal-plan` coincide con el nombre de una receta, se enlaza (así sus ingredientes pueden pasar a la compra).
 
 Los importes admiten `12,50 €`, `€12.50`, `1.234,56`… El texto libre de eventos entiende *hoy, mañana, pasado mañana, el viernes, 12/11, 15 de diciembre, a las 5, a las 17:30, a las 9 y media…*
 
@@ -132,6 +137,10 @@ GET    /api/quick                  lista de acciones rápidas disponibles
 /api/expenses      GET ?month&q&category&paidBy · POST · GET/PATCH/DELETE /:id
 /api/expenses/summary?month=YYYY-MM · /api/expenses/export.csv
 /api/expenses/categories   GET · POST · PATCH/DELETE /:id
+/api/meals/recipes    GET ?q · POST {name,notes,servings,url,tags,ingredients} · GET/PUT/DELETE /:id
+/api/meals/plan       GET ?from&to · GET/PUT/DELETE /:date/:meal {recipeId|text,notes,cookId}
+/api/meals/plan/shopping   POST {from,to,listId?}  ingredientes de las recetas planificadas → lista de la compra
+/api/meals/plan/copy       POST {from,to,overwrite?}  copia 7 días desde from a los 7 días desde to
 ```
 
 ## 🧩 Cómo añadir un módulo nuevo
@@ -181,7 +190,7 @@ npm test       # tests de la API (node:test)
 src/
   core/        app (montaje de módulos), auth (tokens), db (migraciones), bootstrap
   lib/         parseo de importes y texto, fechas en español, repeticiones, ICS
-  modules/     events · shopping · expenses
+  modules/     events · shopping · expenses · meals
 public/
   js/          app (router), api, ui, calendar-view, event-editor
   js/modules/  una página por módulo

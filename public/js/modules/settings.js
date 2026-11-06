@@ -56,6 +56,23 @@ const SHORTCUTS = (base) => [
     steps: [`GET ${base}/api/quick/agenda?format=text (o &date=YYYY-MM-DD) → «Leer texto».`],
     curl: `curl "${base}/api/quick/agenda?format=text" -H "Authorization: Bearer TU_TOKEN"`,
   },
+  {
+    title: '🍽️ "Oye Siri, qué hay para cenar"',
+    steps: [
+      `«Obtener contenido de URL» GET ${base}/api/quick/meal?format=text con la cabecera Authorization → «Leer texto». Dice lo planificado hoy para comer y cenar.`,
+      'Para otro día añade &text=mañana (o &date=YYYY-MM-DD); para una sola comida, &meal=cena. También puedes «Dictar texto» y enviarlo como text («mañana para comer»).',
+    ],
+    curl: `curl "${base}/api/quick/meal?format=text&text=ma%C3%B1ana" -H "Authorization: Bearer TU_TOKEN"`,
+  },
+  {
+    title: '📝 "Oye Siri, planifica la cena"',
+    steps: [
+      'Nuevo atajo → «Dictar texto» (p.ej. «mañana cena lasaña» o «el viernes para comer paella»).',
+      `«Obtener contenido de URL» POST ${base}/api/quick/meal-plan?format=text con JSON text = Texto dictado → «Leer texto».`,
+      'También acepta date (YYYY-MM-DD) + meal (desayuno, comida, merienda o cena) + text. Si el plato coincide con una receta, se enlaza para poder pasar sus ingredientes a la compra.',
+    ],
+    curl: `curl -X POST "${base}/api/quick/meal-plan?format=text" -H "Authorization: Bearer TU_TOKEN" -H "Content-Type: application/json" -d '{"text":"mañana cena lasaña"}'`,
+  },
 ];
 
 export default {
