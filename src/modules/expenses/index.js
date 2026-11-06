@@ -1,6 +1,8 @@
 import { bad, intId, notFound } from '../../core/http.js';
 import { parseAmountToCents, parseExpenseText, formatEuros, capitalize } from '../../lib/parse.js';
 import { isDate, today } from '../../lib/dates.js';
+import { transaction } from '../../core/db.js';
+import { splitMigration, splitRoutes, applySplitInput, attachSplits, sharesByUser, balances, balanceMessage, sharedFromInput, normalizeSplits } from './split.js';
 
 const norm = (s) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
 
@@ -55,15 +57,22 @@ export function createExpense(db, data, user) {
   const description = String(data.description ?? '').trim() || merchant || 'Gasto';
   const categoryId = guessCategory(db, { category: data.category ?? data.categoryId, merchant, description });
   const paidBy = resolveUser(db, data.paidBy, user?.id ?? null);
-  const r = db.prepare(`INSERT INTO expenses (amount_cents, description, merchant, category_id, paid_by, date, source, card, notes, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(Math.abs(cents), description, merchant, categoryId, paidBy, date, String(data.source || 'web'), String(data.card || ''), String(data.notes || ''), user?.id ?? null);
-  return getExpense(db, Number(r.lastInsertRowid));
+  const shared = sharedFromInput(data) ?? 1;
+  if (shared) normalizeSplits(db, data.splits); // valida antes de insertar
+  const id = transaction(db, () => {
+    const r = db.prepare(`INSERT INTO expenses (amount_cents, description, merchant, category_id, paid_by, date, source, card, notes, created_by, shared)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(Math.abs(cents), description, merchant, categoryId, paidBy, date, String(data.source || 'web'), String(data.card || ''), String(data.notes || ''), user?.id ?? null, shared);
+    const newId = Number(r.lastInsertRowid);
+    applySplitInput(db, newId, { ...data, shared }, { isNew: true });
+    return newId;
+  });
+  return getExpense(db, id);
 }
 
 function getExpense(db, id) {
-  return db.prepare(`SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color, u.name AS paid_by_name
-    FROM expenses e LEFT JOIN expense_categories c ON c.id = e.category_id LEFT JOIN users u ON u.id = e.paid_by WHERE e.id = ?`).get(id);
+  return attachSplits(db, db.prepare(`SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color, u.name AS paid_by_name
+    FROM expenses e LEFT JOIN expense_categories c ON c.id = e.category_id LEFT JOIN users u ON u.id = e.paid_by WHERE e.id = ?`).get(id));
 }
 
 const monthRange = (month) => {
@@ -81,6 +90,9 @@ function summary(db, month) {
     GROUP BY c.id HAVING total > 0 OR c.budget_cents > 0 ORDER BY total DESC`).all(from, to);
   const byUser = db.prepare(`SELECT u.id, u.name, u.color, COALESCE(SUM(e.amount_cents),0) AS total
     FROM users u LEFT JOIN expenses e ON e.paid_by = u.id AND e.date BETWEEN ? AND ? GROUP BY u.id ORDER BY total DESC`).all(from, to);
+  // Lo que le corresponde a cada uno (parte de los compartidos + sus gastos personales)
+  const shares = sharesByUser(db, from, to);
+  for (const u of byUser) Object.assign(u, shares.get(u.id) || { share: 0, personal: 0 });
   const byDay = db.prepare('SELECT date, SUM(amount_cents) AS total FROM expenses WHERE date BETWEEN ? AND ? GROUP BY date ORDER BY date').all(from, to);
   // Comparativa con los 6 meses anteriores
   const [y, m] = month.split('-').map(Number);
@@ -114,6 +126,7 @@ export default {
       const ins = db.prepare('INSERT INTO expense_categories (name, icon, color, keywords, position) VALUES (?, ?, ?, ?, ?)');
       DEFAULT_CATEGORIES.forEach(([n, i, c, k], idx) => ins.run(n, i, c, k, idx));
     },
+    splitMigration, // reparto: shared, partes, liquidaciones y ajustes
   ],
 
   routes(r, { db }) {
@@ -149,9 +162,9 @@ export default {
       if (category) { where.push('e.category_id = ?'); args.push(intId(category)); }
       if (paidBy) { where.push('e.paid_by = ?'); args.push(intId(paidBy)); }
       if (q) { where.push('(e.description LIKE ? OR e.merchant LIKE ? OR e.notes LIKE ?)'); args.push(`%${q}%`, `%${q}%`, `%${q}%`); }
-      res.json(db.prepare(`SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color, u.name AS paid_by_name
+      res.json(attachSplits(db, db.prepare(`SELECT e.*, c.name AS category_name, c.icon AS category_icon, c.color AS category_color, u.name AS paid_by_name
         FROM expenses e LEFT JOIN expense_categories c ON c.id = e.category_id LEFT JOIN users u ON u.id = e.paid_by
-        ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY e.date DESC, e.id DESC LIMIT 1000`).all(...args));
+        ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY e.date DESC, e.id DESC LIMIT 1000`).all(...args)));
     });
     r.post('/', (req, res) => res.status(201).json(createExpense(db, { ...req.body, source: req.body?.source || 'web' }, req.user)));
     r.get('/summary', (req, res) => res.json(summary(db, req.query.month || today().slice(0, 7))));
@@ -163,12 +176,13 @@ export default {
         ...rows.map((x) => [x.date, (x.amount_cents / 100).toFixed(2).replace('.', ','), x.description, x.merchant, x.category, x.paid_by, x.source, x.card, x.notes].map(q).join(';'))].join('\n');
       res.type('text/csv; charset=utf-8').attachment('gastos.csv').send('﻿' + csv);
     });
+    splitRoutes(r, db, { today });
     r.get('/:id', (req, res) => {
       const e = getExpense(db, intId(req.params.id));
       if (!e) throw notFound();
       res.json(e);
     });
-    r.patch('/:id', (req, res) => {
+    r.patch('/:id', (req, res) => transaction(db, () => {
       const id = intId(req.params.id);
       if (!getExpense(db, id)) throw notFound();
       const b = req.body || {};
@@ -186,8 +200,9 @@ export default {
       }
       if (b.categoryId !== undefined) db.prepare('UPDATE expenses SET category_id = ? WHERE id = ?').run(b.categoryId ? intId(b.categoryId) : null, id);
       if (b.paidBy !== undefined) db.prepare('UPDATE expenses SET paid_by = ? WHERE id = ?').run(b.paidBy ? intId(b.paidBy) : null, id);
+      applySplitInput(db, id, b);
       res.json(getExpense(db, id));
-    });
+    }));
     r.delete('/:id', (req, res) => {
       db.prepare('DELETE FROM expenses WHERE id = ?').run(intId(req.params.id));
       res.json({ ok: true });
@@ -200,7 +215,7 @@ export default {
       params: {
         amount: 'Importe ("12,50 €", 12.5...)', merchant: '(opcional) comercio', description: '(opcional) concepto',
         category: '(opcional) nombre de categoría', card: '(opcional) tarjeta', date: '(opcional) YYYY-MM-DD',
-        paidBy: '(opcional) nombre de quien paga', text: 'Alternativa: texto libre "12,50 mercadona"', source: '(opcional) wallet | siri | shortcut',
+        paidBy: '(opcional) nombre de quien paga', shared: '(opcional) false para un gasto personal (o personal=true)', text: 'Alternativa: texto libre "12,50 mercadona"', source: '(opcional) wallet | siri | shortcut',
       },
       handler({ db }, p, user) {
         let data = { ...p };
@@ -212,9 +227,17 @@ export default {
         const e = createExpense(db, { ...data, source: p.source || (p.merchant ? 'wallet' : 'shortcut') }, user);
         const monthTotal = summary(db, e.date.slice(0, 7));
         const cat = monthTotal.byCategory.find((c) => c.id === e.category_id);
-        let message = `Gasto de ${formatEuros(e.amount_cents)} en ${e.description} (${e.category_name || 'sin categoría'}).`;
+        let message = `Gasto${e.shared ? '' : ' personal'} de ${formatEuros(e.amount_cents)} en ${e.description} (${e.category_name || 'sin categoría'}).`;
         if (cat?.budget_cents) message += ` Llevas ${formatEuros(cat.total)} de ${formatEuros(cat.budget_cents)} este mes.`;
         return { message, expense: e };
+      },
+    },
+    balance: {
+      description: '¿Quién debe a quién? Resume los saldos del reparto de gastos ("Luis debe 12,30 € a Ana").',
+      params: { from: '(opcional) desde YYYY-MM-DD', to: '(opcional) hasta YYYY-MM-DD' },
+      handler({ db }, p) {
+        const b = balances(db, { from: p.from || undefined, to: p.to || undefined });
+        return { message: balanceMessage(b), debts: b.debts, users: b.users };
       },
     },
   },

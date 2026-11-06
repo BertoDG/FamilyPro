@@ -43,6 +43,16 @@ const SHORTCUTS = (base) => [
     curl: `curl -X POST "${base}/api/quick/expense?format=text" -H "Authorization: Bearer TU_TOKEN" -H "Content-Type: application/json" -d '{"text":"12,50 farmacia","source":"siri"}'`,
   },
   {
+    title: '⚖️ "Oye Siri, quién debe a quién"',
+    steps: [
+      'Nuevo atajo «Quién debe a quién» (esa será la frase para Siri).',
+      `«Obtener contenido de URL» GET ${base}/api/quick/balance?format=text con la cabecera Authorization = Bearer TU_TOKEN → «Leer texto».`,
+      'Responde con la lista mínima de pagos, p.ej. «Luis debe 12,30 € a Ana.», o «Estáis en paz» si nadie debe nada.',
+      'Para apuntar un gasto solo tuyo (que no se reparte) añade personal = true (o shared = false) al atajo de gastos.',
+    ],
+    curl: `curl "${base}/api/quick/balance?format=text" -H "Authorization: Bearer TU_TOKEN"`,
+  },
+  {
     title: '📅 "Oye Siri, crea un evento familiar"',
     steps: [
       'Nuevo atajo → «Dictar texto» (p.ej. «mañana a las 17:30 dentista de Lucía»).',

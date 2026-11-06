@@ -219,3 +219,38 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .meals-actions .btn { flex: 1 1 100%; justify-content: center; white-space: normal; }
   .cal-toolbar .cal-title { min-width: 0; }
 }
+
+/* Reparto */
+.split-grid { grid-template-columns: 3fr 2fr; }
+@media (max-width: 900px) { .split-grid { grid-template-columns: 1fr; } }
+.split-box { display: grid; gap: .6rem; padding: .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
+.field-group { display: grid; gap: .3rem; }
+.split-custom { display: grid; gap: .45rem; }
+.split-line { display: grid; grid-template-columns: auto 1fr 7rem auto; gap: .5rem; align-items: center; }
+.split-line .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.split-line .pct { min-width: 3.5rem; text-align: right; }
+.split-preview { display: flex; flex-wrap: wrap; gap: .35rem; }
+.split-preview .chip { cursor: default; }
+.split-preview .ok { color: var(--ok); }
+.split-preview .warn, .split-box .warn { color: var(--danger); }
+.split-tag { margin-left: .35rem; font-weight: 500; white-space: nowrap; }
+.form > .seg, .split-box .seg { justify-self: start; }
+.bal-users { display: grid; gap: .45rem; margin-bottom: .75rem; }
+.bal-user { display: flex; align-items: center; gap: .6rem; }
+.bal-user .avatar { width: 1.8rem; height: 1.8rem; font-size: .75rem; }
+.bal-user .who { flex: 1; min-width: 0; }
+.bal-net { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bal-net.pos { color: var(--ok); }
+.bal-net.neg { color: var(--danger); }
+.debts { display: grid; gap: .4rem; }
+.debt { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .55rem .7rem; border-radius: 10px; background: var(--primary-soft); }
+.debt.even { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); font-weight: 600; }
+.settle-list { list-style: none; margin: 0; padding: 0; }
+.settle-list li { display: flex; align-items: center; gap: .5rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.settle-list li:last-child { border-bottom: 0; }
+.settle-list .d { width: 3.6rem; flex: none; }
+.settle-list .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 760px) {
+  .split-line { grid-template-columns: auto 1fr 5.5rem auto; }
+  .debt .btn { margin-left: auto; }
+}

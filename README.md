@@ -15,7 +15,7 @@ Está construida por módulos: cada "app" (compra, gastos, calendario…) es un 
 | 🏠 **Inicio** | Resumen (eventos de hoy, productos pendientes, gasto del mes) y **calendario principal** con todas las fuentes. Los filtros por fuente y subcalendario se guardan en tu perfil. |
 | 📅 **Calendario** | Vistas de mes, semana y agenda. Eventos de día completo o con hora, repeticiones (diaria, semanal, mensual o anual, con intervalo y fecha de fin), borrar solo una repetición o toda la serie, participantes, lugar y subcalendarios con color (Familia, Colegio, Médicos…). **Feed ICS** para suscribirse desde el Calendario del iPhone. |
 | 🛒 **Compra** | Varias listas (Supermercado, Farmacia…). Puedes añadir varias cosas de golpe ("leche, 2 huevos y pan"), detecta cantidades, no duplica lo que ya está pendiente, autocompleta con lo comprado antes, separa lo que ya está en el carro y se refresca sola cada 15 s. |
-| 💶 **Gastos** | Categorías con icono, color, presupuesto mensual y **palabras clave**: el comercio de Wallet se clasifica solo y la app aprende de tus correcciones. Resumen mensual por categoría y por persona, histórico de 6 meses, búsqueda y exportación a CSV. |
+| 💶 **Gastos** | Categorías con icono, color, presupuesto mensual y **palabras clave**: el comercio de Wallet se clasifica solo y la app aprende de tus correcciones. Resumen mensual por categoría y por persona (lo que ha pagado y lo que le toca), histórico de 6 meses, búsqueda y exportación a CSV. **Reparto entre miembros:** cada gasto es *compartido* (por defecto, según la proporción de la casa: a partes iguales o con pesos, p.ej. 60/40) o *personal*, y admite un reparto a medida por importes o pesos. Tarjeta **Balance** con lo que ha pagado cada uno, lo que le corresponde, el saldo neto y la lista mínima de pagos ("Luis debe 12,30 € a Ana") con botón **Saldar**, que registra el pago entre miembros. |
 | ✅ **Tareas** | Tareas del hogar con fecha límite (y hora opcional), prioridad, responsable y notas. Lista agrupada en Atrasadas, Hoy, Próximas, Sin fecha y Hechas recientes, filtro *Mías / Todas* y alta rápida con texto libre ("mañana sacar la basura para Luis"). **Tareas recurrentes** (diaria, semanal o mensual con intervalo) con **rotación** de responsables: al completarla, la fecha salta a la siguiente repetición y le toca al siguiente. Aparecen en el calendario principal y en el feed ICS. |
 | 🍽️ **Menú** | Planificación semanal (desayuno, comida, merienda y cena; por defecto se ven comida y cena) con navegación por semanas, y en el móvil una lista por días. Cada hueco lleva una receta o texto libre, notas y quién cocina. **Recetario** con raciones, enlace, etiquetas, preparación e ingredientes (una línea por ingrediente: "2 cebollas"). Un botón pasa los ingredientes de la semana a la lista de la compra sin duplicar lo pendiente, y otro copia la semana anterior en los huecos vacíos. Fuente "Menú" opcional en el calendario principal. |
 | ⚙️ **Ajustes** | Perfil, tokens (crear y revocar uno por dispositivo), miembros de la casa (solo administradores), URL de suscripción al calendario y guía de atajos con ejemplos `curl` listos para copiar. |
@@ -80,7 +80,8 @@ Todas están en `/api/quick/<acción>`. Aceptan **GET o POST** (JSON, formulario
 |---|---|---|
 | `POST /api/quick/shopping` | `text` ("leche, 2 huevos y pan"), `list` (opcional) | *Añadido a Supermercado: Leche, 2 Huevos y Pan.* |
 | `GET /api/quick/shopping-list` | `list` (opcional) | *En Supermercado hay 3: Leche, 2 Huevos y Pan.* |
-| `POST /api/quick/expense` | `amount`, `merchant`, `description`, `category`, `card`, `date`, `paidBy`, `source`, **o** `text` ("12,50 farmacia") | *Gasto de 12,50 € en Farmacia (Salud).* |
+| `POST /api/quick/expense` | `amount`, `merchant`, `description`, `category`, `card`, `date`, `paidBy`, `source`, **o** `text` ("12,50 farmacia"); `personal=true` (o `shared=false`) para un gasto que no se reparte | *Gasto de 12,50 € en Farmacia (Salud).* |
+| `GET /api/quick/balance` | `from`, `to` (opcionales) | *Luis debe 12,30 € a Ana.* / *Estáis en paz: nadie debe nada.* |
 | `POST /api/quick/event` | `text` ("mañana a las 17:30 dentista"), **o** `title` + `date` + `time` + `duration`; `calendar` (opcional) | *Evento "Dentista" creado para el sábado, 7 de noviembre a las 17:30.* |
 | `GET /api/quick/agenda` | `date` (opcional) | *Tienes 2: 09:00 ITV; 18:00 Natación.* |
 | `POST /api/quick/task` | `text` ("mañana a las 18:00 sacar la basura", admite "… para Luis" al final), `assignee` (nombre, opcional), `date`, `time`, `priority` (opcionales) | *Tarea "Sacar la basura" añadida para el sábado, 7 de noviembre a las 18:00 (Luis).* |
@@ -114,6 +115,17 @@ Los importes admiten `12,50 €`, `€12.50`, `1.234,56`… El texto libre de ev
 
 La categoría se elige sola: primero mira si ese comercio ya tiene categoría en un gasto anterior (así aprende de tus correcciones) y, si no, busca las palabras clave de cada categoría.
 
+### Atajo "Quién debe a quién" (Siri)
+
+Atajo llamado **"Quién debe a quién"** con **Obtener contenido de URL** `GET https://tu-dominio/api/quick/balance?format=text` (cabecera `Authorization`) y **Leer texto**.
+
+### Cómo se reparte un gasto
+
+- **Compartido sin reparto propio:** según la proporción por defecto de la casa (*Gastos → Reparto*): a partes iguales entre todos los miembros o por pesos (60/40, o 0 para quien no participa). Se aplica al calcular, así que cambiar la proporción recalcula esos gastos.
+- **Reparto personalizado:** importes exactos por persona (deben sumar el total) o pesos/porcentajes.
+- **Personal:** solo para quien lo paga; no entra en el balance.
+- Saldo neto = pagado − lo que le toca + pagos enviados − pagos recibidos. Todo en céntimos enteros; los céntimos sobrantes se asignan por mayor resto y, a igualdad, al miembro con id más bajo (100 € entre tres = 33,34 + 33,33 + 33,33).
+
 ### Calendario en la app Calendario del iPhone
 
 En **Ajustes → Calendario en el iPhone → Generar URL de suscripción** sale una URL `webcal://…/api/calendar.ics?token=…`. Añádela en *Ajustes de iOS → Calendario → Cuentas → Añadir cuenta → Otra → Añadir calendario suscrito*. Las repeticiones se exportan como `RRULE`.
@@ -138,6 +150,10 @@ GET    /api/quick                  lista de acciones rápidas disponibles
 /api/shopping/items/:id PATCH {checked,name,quantity,notes,listId} · DELETE
 /api/shopping/suggestions
 /api/expenses      GET ?month&q&category&paidBy · POST · GET/PATCH/DELETE /:id
+                   (POST/PATCH aceptan shared|personal y splits [{userId, amount}] o [{userId, weight|percent}]; splits:null quita el reparto propio)
+/api/expenses/balances?from&to     saldos por miembro y deudas simplificadas
+/api/expenses/settlements          GET ?from&to · POST {from,to,amount,date,notes} · GET/PATCH/DELETE /:id
+/api/expenses/split-settings       GET · PUT {mode: equal|weights, weights: {userId: peso}}
 /api/expenses/summary?month=YYYY-MM · /api/expenses/export.csv
 /api/expenses/categories   GET · POST · PATCH/DELETE /:id
 /api/tasks         GET ?status=pending|done|all&mine=1&assignee=<id|none>&doneSince=YYYY-MM-DD · POST

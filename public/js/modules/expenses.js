@@ -1,6 +1,7 @@
 import { api } from '../api.js';
 import { h, clear, modal, field, toast, toastError, confirmDialog, euros, ymd, cap } from '../ui.js';
 import { state } from '../app.js';
+import { splitEditor, renderBalance, renderSettlements, splitSettingsDialog } from './expenses-split.js';
 
 const SRC = { web: '🖥️', wallet: '💳', siri: '🎙️', shortcut: '⚡' };
 const monthLabel = (m) => cap(new Date(`${m}-01T12:00:00`).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }));
@@ -9,19 +10,24 @@ const shiftMonth = (m, n) => { const [y, mm] = m.split('-').map(Number); const d
 export default {
   id: 'expenses', title: 'Gastos', icon: '💶', module: 'expenses',
   async render(el) {
-    let month = ymd(new Date()).slice(0, 7), cats = [], q = '', catFilter = '';
+    let month = ymd(new Date()).slice(0, 7), cats = [], q = '', catFilter = '', splitSettings = null;
     const head = h('div.page-head');
     const stats = h('div.grid.cards');
     const breakdown = h('div.card');
     const side = h('div.grid');
     const table = h('div.card');
+    const balanceCard = h('div.card.balance');
+    const settleCard = h('div.card');
 
     const load = async () => {
       try {
         const qs = new URLSearchParams({ month, ...(q ? { q } : {}), ...(catFilter ? { category: catFilter } : {}) });
-        const [sum, rows, c] = await Promise.all([api.get(`/expenses/summary?month=${month}`), api.get(`/expenses?${qs}`), api.get('/expenses/categories')]);
-        cats = c;
+        const [sum, rows, c, bal, settl, ss] = await Promise.all([api.get(`/expenses/summary?month=${month}`), api.get(`/expenses?${qs}`), api.get('/expenses/categories'),
+          api.get('/expenses/balances'), api.get('/expenses/settlements'), api.get('/expenses/split-settings')]);
+        cats = c; splitSettings = ss;
         renderHead(); renderStats(sum); renderBreakdown(sum); renderSide(sum); renderTable(rows);
+        renderBalance(balanceCard, { balances: bal, users: state.users, onChange: load });
+        renderSettlements(settleCard, { settlements: settl, users: state.users, onChange: load });
       } catch (e) { toastError(e); }
     };
 
@@ -30,6 +36,7 @@ export default {
       h('strong', { style: { minWidth: '9rem', textAlign: 'center' } }, monthLabel(month)),
       h('button.btn.ghost', { onclick: () => { month = shiftMonth(month, 1); load(); } }, '›'),
       h('button.btn', { onclick: manageCategories }, '⚙︎ Categorías'),
+      h('button.btn', { onclick: () => splitSettingsDialog({ onDone: load }) }, '⚖︎ Reparto'),
       h('button.btn', { onclick: exportCsv }, '⬇︎ CSV'),
       h('button.btn.primary', { onclick: () => editExpense() }, '+ Gasto'));
 
@@ -61,7 +68,8 @@ export default {
             h('span', { style: { height: `${(x.total / max) * 80}%` } }),
             new Date(`${x.month}-01T12:00:00`).toLocaleDateString('es-ES', { month: 'short' }))))),
         h('div.card', h('h2', 'Quién ha pagado'), s.byUser.map((u) => h('div.row', { style: { marginBottom: '.4rem' } },
-          h('span.dot', { style: { background: u.color } }), u.name, h('div.spacer'), h('strong', euros(u.total))))));
+          h('span.dot', { style: { background: u.color } }), u.name, h('div.spacer'), h('strong', euros(u.total)),
+          h('span.small.muted', { title: 'Lo que le corresponde (su parte de los compartidos + sus gastos personales)' }, `le toca ${euros(u.share || 0)}`)))));
     };
 
     const renderTable = (rows) => {
@@ -71,7 +79,8 @@ export default {
           h('thead', h('tr', h('th', 'Fecha'), h('th', 'Concepto'), h('th', 'Categoría'), h('th', 'Pagó'), h('th.num', 'Importe'))),
           h('tbody', rows.map((r) => h('tr', { style: { cursor: 'pointer' }, onclick: () => editExpense(r) },
             h('td.small', new Date(`${r.date}T12:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })),
-            h('td', h('span', { title: r.source }, SRC[r.source] || '•'), ' ', r.description, r.card ? h('span.small.muted', ` · ${r.card}`) : null),
+            h('td', h('span', { title: r.source }, SRC[r.source] || '•'), ' ', r.description, r.card ? h('span.small.muted', ` · ${r.card}`) : null,
+              !r.shared ? h('span.badge.split-tag', 'personal') : r.splits?.length ? h('span.badge.split-tag', { title: r.shares.map((x) => `${state.users.find((u) => u.id === x.userId)?.name || '?'}: ${euros(x.cents)}`).join(' · ') }, 'a medida') : null),
             h('td', h('span.chip', h('span.dot', { style: { background: r.category_color || '#999' } }), r.category_name || '—')),
             h('td.small', r.paid_by_name || '—'),
             h('td.num', h('strong', euros(r.amount_cents)))))))) : h('div.empty', 'No hay movimientos'));
@@ -87,9 +96,10 @@ export default {
       const cat = h('select', h('option', { value: '' }, 'Automática'), cats.map((c) => h('option', { value: c.id, selected: c.id === e.category_id }, `${c.icon} ${c.name}`)));
       const paid = h('select', state.users.map((u) => h('option', { value: u.id, selected: u.id === (e.paid_by ?? state.me.id) }, u.name)));
       const notes = h('input', { value: e.notes || '', placeholder: 'Notas' });
+      const split = splitEditor({ expense: e, users: state.users, settings: splitSettings, amountInput: amount });
       modal(isNew ? 'Nuevo gasto' : 'Editar gasto', (close) => h('form.form', { onsubmit: async (ev) => {
         ev.preventDefault();
-        const body = { amount: amount.value, description: desc.value, merchant: merchant.value, date: date.value, paidBy: Number(paid.value), notes: notes.value };
+        const body = { amount: amount.value, description: desc.value, merchant: merchant.value, date: date.value, paidBy: Number(paid.value), notes: notes.value, ...split.value() };
         try {
           if (isNew) await api.post('/expenses', { ...body, category: cat.value || undefined });
           else await api.patch(`/expenses/${e.id}`, { ...body, categoryId: cat.value ? Number(cat.value) : null });
@@ -98,7 +108,8 @@ export default {
       } },
       h('div.cols', field('Importe', amount), field('Fecha', date)),
       field('Concepto', desc), field('Comercio', merchant),
-      h('div.cols', field('Categoría', cat), field('Pagado por', paid)), notes,
+      h('div.cols', field('Categoría', cat), field('Pagado por', paid)),
+      h('div.field-group', h('div.small.muted', 'Reparto'), split.el), notes,
       !isNew ? h('div.small.muted', `Origen: ${SRC[e.source] || ''} ${e.source}`) : null,
       h('div.actions', !isNew ? h('button.btn.danger', { type: 'button', onclick: async () => {
         if (!(await confirmDialog('Eliminar este gasto?'))) return;
@@ -146,7 +157,8 @@ export default {
       URL.revokeObjectURL(url);
     };
 
-    clear(el, head, stats, h('div.grid.two-col', { style: { marginTop: '1rem' } }, breakdown, side), h('div', { style: { height: '1rem' } }), table,
+    clear(el, head, stats, h('div.grid.split-grid', { style: { marginTop: '1rem' } }, balanceCard, settleCard),
+      h('div.grid.two-col', { style: { marginTop: '1rem' } }, breakdown, side), h('div', { style: { height: '1rem' } }), table,
       h('button.fab', { onclick: () => editExpense() }, '+'));
     await load();
   },
