@@ -1,4 +1,6 @@
 // Generación mínima de iCalendar (RFC 5545) para suscribirse desde el calendario del iPhone.
+import { appTz } from './dates.js';
+
 const esc = (s = '') => String(s).replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (m) => '\\' + m);
 const compact = (s) => s.replace(/[-:]/g, '');
 
@@ -24,7 +26,7 @@ function nextDay(d) {
 }
 
 /** items: [{uid, title, description, location, start, end, allDay, recurrence, recurrenceInterval, recurrenceUntil}] */
-export function buildICS(items, { name = 'FamilyPro', tz = process.env.TZ || 'Europe/Madrid' } = {}) {
+export function buildICS(items, { name = 'FamilyPro', tz = appTz() } = {}) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//FamilyPro//ES', 'CALSCALE:GREGORIAN',
     `X-WR-CALNAME:${esc(name)}`, `X-WR-TIMEZONE:${tz}`];

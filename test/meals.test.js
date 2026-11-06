@@ -11,10 +11,10 @@ const T = today();
 const TOMORROW = fmtDate(addDays(toUTC(T), 1));
 
 before(async () => {
-  const db = openDb(':memory:');
-  const app = createApp(db);
-  userId = createUser(db, { name: 'Ana', isAdmin: true });
-  token = createToken(db, userId);
+  const db = await openDb('memory://');
+  const app = await createApp(db);
+  userId = await createUser(db, { name: 'Ana', isAdmin: true });
+  token = await createToken(db, userId);
   server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
 });

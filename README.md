@@ -4,9 +4,10 @@ Web para gestionar los temas de casa: **calendario familiar**, **lista de la com
 
 Está construida por módulos: cada "app" (compra, gastos, calendario…) es un módulo independiente que se enchufa al núcleo, y el **calendario principal** junta lo que publique cada módulo, con filtros para ver todo o solo lo que elijas.
 
-- **Backend:** Node.js 22 + Express 5 + SQLite (`node:sqlite`, sin dependencias nativas).
+- **Backend:** Node.js 22 + Express 5 + **Postgres**: [Supabase](https://supabase.com) en producción y [PGlite](https://pglite.dev) (Postgres embebido, sin instalar nada) en local y en los tests.
 - **Frontend:** SPA en JavaScript sin paso de compilación. Funciona bien en móvil y se puede añadir a la pantalla de inicio (PWA).
-- **Una sola dependencia:** `express`.
+- **Despliegue:** [Vercel](https://vercel.com) (la API como función serverless y `public/` como estáticos) o Docker.
+- **Tres dependencias:** `express`, `postgres` (cliente para Supabase) y `@electric-sql/pglite`.
 
 ## Funcionalidades
 
@@ -22,36 +23,62 @@ Está construida por módulos: cada "app" (compra, gastos, calendario…) es un 
 
 ## Puesta en marcha
 
-### Con Docker (recomendado)
-
-```bash
-docker compose up -d --build
-docker compose logs familypro   # aquí aparece el token del administrador la primera vez
-```
-
-### Sin Docker
+### En local (desarrollo)
 
 ```bash
 npm install
 npm start           # http://localhost:3000
 ```
 
-La primera vez que arranca se crea el usuario administrador (`ADMIN_NAME`, por defecto `admin`) y **su token sale por consola una sola vez**. Con ese token entras en la web y desde **Ajustes → Miembros** creas al resto de la familia, cada uno con su token.
+Sin configurar nada usa una base de datos Postgres embebida (PGlite) guardada en `data/pglite`. La primera vez que arranca se crea el usuario administrador (`ADMIN_NAME`, por defecto `admin`) y **su token sale por consola una sola vez**. Con ese token entras en la web y desde **Ajustes → Miembros** creas al resto de la familia, cada uno con su token.
+
+Si creas un fichero `.env` (copia [.env.example](.env.example)) con `DATABASE_URL`, la app local trabaja directamente contra Supabase.
+
+### En internet: Vercel + Supabase
+
+**1. Base de datos en Supabase**
+
+1. Crea un proyecto en [supabase.com](https://supabase.com) (región *West EU* para que vaya rápido desde España) y guarda la contraseña de la base de datos.
+2. En **Connect** (arriba) → **Connection string** → **Transaction pooler** copia la URL (puerto **6543**) y sustituye `[YOUR-PASSWORD]` por la contraseña.
+3. Crea las tablas y el administrador desde tu ordenador:
+   ```bash
+   # en .env:  DATABASE_URL=postgresql://postgres.xxxx:CONTRASEÑA@aws-0-eu-west-1.pooler.supabase.com:6543/postgres
+   npm run cli -- init        # muestra el token del administrador UNA sola vez
+   ```
+
+**2. App en Vercel**
+
+1. En [vercel.com](https://vercel.com) → **Add New → Project** → importa el repo de GitHub. No hay que tocar nada de la configuración de build: la lee de [vercel.json](vercel.json).
+2. En **Environment Variables** añade `DATABASE_URL` (la misma URL del pooler) y `APP_TZ=Europe/Madrid`.
+3. **Deploy**. Cada merge a `main` se publica solo y cada PR tiene su propia URL de previsualización.
+
+> Las previsualizaciones de los PR usan la misma `DATABASE_URL` salvo que definas otra para el entorno *Preview* en Vercel. Si quieres probar sin tocar los datos reales, crea un segundo proyecto de Supabase para *Preview*.
+
+### Con Docker
+
+```bash
+docker compose up -d --build
+docker compose logs familypro   # aquí aparece el token del administrador la primera vez
+```
 
 Variables de entorno:
 
 | Variable | Por defecto | |
 |---|---|---|
-| `PORT` | `3000` | Puerto HTTP |
-| `DB_FILE` | `data/familypro.db` | Fichero SQLite |
-| `TZ` | `Europe/Madrid` | Zona horaria (para "hoy", Siri y el ICS) |
+| `DATABASE_URL` | — | Conexión Postgres (Supabase: usa el *Transaction pooler*, puerto 6543). También vale `POSTGRES_URL`. |
+| `PGLITE_DIR` | `data/pglite` | Carpeta de la base de datos embebida, si no hay `DATABASE_URL` |
+| `APP_TZ` | `Europe/Madrid` | Zona horaria de la casa (para "hoy", Siri y el ICS). En Vercel no se puede usar `TZ`. |
 | `ADMIN_NAME` | `admin` | Nombre del primer usuario |
+| `PORT` | `3000` | Puerto HTTP (local y Docker) |
 
-> **Importante:** para usarla desde el iPhone fuera de casa, publícala con **HTTPS**: un proxy inverso (Caddy, Nginx Proxy Manager, Traefik), Cloudflare Tunnel o Tailscale. El token viaja en cada petición.
+> **Importante:** el token viaja en cada petición, así que fuera de casa usa siempre **HTTPS** (Vercel ya lo pone).
 
 ### CLI de administración
 
+Trabaja contra la misma base de datos que la app (Supabase si hay `DATABASE_URL` en `.env`).
+
 ```bash
+npm run cli -- init [nombre]          # crea tablas y, si no hay usuarios, el administrador
 npm run cli -- users                  # lista usuarios
 npm run cli -- add-user Lucia         # crea usuario y muestra su token
 npm run cli -- add-user Pedro --admin
@@ -176,27 +203,39 @@ Un módulo de backend es un objeto con este contrato (todas las claves son opcio
 export default {
   id: 'tareas',                 // se monta en /api/tareas
   name: 'Tareas', icon: '✅',
-  migrations: [                 // SQL o funciones (db) => {}; solo se añaden al final, nunca se reordenan
-    `CREATE TABLE tasks (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due TEXT, done INTEGER DEFAULT 0)`,
+  migrations: [                 // SQL de Postgres o funciones async (tx) => {}; solo se añaden al final, nunca se reordenan
+    `CREATE TABLE tasks (id SERIAL PRIMARY KEY, title TEXT NOT NULL, due TEXT, done INTEGER NOT NULL DEFAULT 0)`,
   ],
   routes(router, { db }) {      // rutas autenticadas; req.user es el usuario del token
-    router.get('/', (req, res) => res.json(db.prepare('SELECT * FROM tasks').all()));
+    router.get('/', async (req, res) => res.json(await db.all('SELECT * FROM tasks WHERE done = ?', 0)));
   },
   quick: {                      // aparecen en /api/quick/<nombre>
     task: {
       description: 'Añade una tarea',
       params: { text: 'Título' },
-      handler: ({ db }, params, user) => { /* … */ return { message: 'Tarea añadida' }; },
+      handler: async ({ db }, params, user) => { /* … */ return { message: 'Tarea añadida' }; },
     },
   },
-  calendar: {                   // fuente para el calendario principal
+  calendar: {                   // fuente para el calendario principal (todo puede ser async)
     label: 'Tareas', color: '#14b8a6', defaultVisible: true,
-    fetch: ({ db }, { from, to, user }) => [/* { id, title, start, end, allDay, color, href, group? } */],
-    ics: ({ db }) => [/* opcional: elementos para el feed ICS */],
+    fetch: async ({ db }, { from, to, user }) => [/* { id, title, start, end, allDay, color, href, group? } */],
+    ics: async ({ db }) => [/* opcional: elementos para el feed ICS */],
   },
-  summary: ({ db }, user) => ({ title: 'Tareas', value: '3', subtitle: 'pendientes', href: '#/tareas' }),
+  summary: async ({ db }, user) => ({ title: 'Tareas', value: '3', subtitle: 'pendientes', href: '#/tareas' }),
 };
 ```
+
+**Acceso a datos** (`src/core/db.js`): todo es asíncrono y los parámetros van con `?`.
+
+```js
+await db.all(sql, ...params)      // filas
+await db.get(sql, ...params)      // primera fila o undefined
+await db.run(sql, ...params)      // { changes }
+await db.insert(sql, ...params)   // id de la fila nueva
+await db.transaction(async (tx) => { /* usa tx, no db, dentro */ })
+```
+
+Para las fechas de creación usa `NOW` (texto UTC `YYYY-MM-DD HH:MM:SS`), p.ej. `` `created_at TEXT NOT NULL DEFAULT (${NOW})` ``. Las columnas de ids son `SERIAL` y los booleanos se guardan como `INTEGER` 0/1.
 
 1. Regístralo en `src/modules/index.js`.
 2. Crea su página en `public/js/modules/tareas.js` (`{ id, title, icon, module: 'tareas', render(el, ctx) }`) y añádela a `public/js/modules/index.js`.
@@ -207,12 +246,13 @@ Con eso el núcleo aplica sus migraciones, monta sus rutas y acciones rápidas, 
 
 ```bash
 npm run dev    # recarga automática
-npm test       # tests de la API (node:test)
+npm test       # tests de la API (node:test) sobre PGlite en memoria: no hace falta Supabase
 ```
 
 ```
+api/index.js   entrada de Vercel (función serverless para /api/*)
 src/
-  core/        app (montaje de módulos), auth (tokens), db (migraciones), bootstrap
+  core/        app (montaje de módulos), auth (tokens), db (Postgres/PGlite y migraciones), bootstrap
   lib/         parseo de importes y texto, fechas en español, repeticiones, ICS
   modules/     events · shopping · expenses · tasks · meals
 public/
