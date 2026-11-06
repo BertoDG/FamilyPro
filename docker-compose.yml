@@ -1,0 +1,11 @@
+services:
+  familypro:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=Europe/Madrid
+      - ADMIN_NAME=admin   # nombre del primer usuario (solo se usa la primera vez)
+    volumes:
+      - ./data:/data

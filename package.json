@@ -1,0 +1,17 @@
+{
+  "name": "familypro",
+  "version": "0.1.0",
+  "description": "Gestión del hogar: lista de la compra, calendario, gastos y más. Modular y con API para atajos de iPhone.",
+  "type": "module",
+  "main": "src/server.js",
+  "engines": { "node": ">=22.13" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/server.js",
+    "cli": "node --disable-warning=ExperimentalWarning scripts/cli.js",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^5.1.0"
+  }
+}
