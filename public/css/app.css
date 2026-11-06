@@ -152,3 +152,28 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .login img { width: 64px; margin: 0 auto; }
 .fab { position: fixed; right: 1.25rem; bottom: 5.5rem; width: 3.5rem; height: 3.5rem; border-radius: 50%; background: var(--primary); color: #fff; border: 0; font-size: 1.8rem; box-shadow: 0 6px 20px rgba(79,124,255,.45); cursor: pointer; z-index: 15; display: none; }
 @media (max-width: 760px) { .fab { display: block; } }
+
+/* Tareas */
+.task-add { margin-bottom: 1rem; }
+.task-groups { display: grid; gap: 1rem; }
+.task-group h2 { display: flex; align-items: center; gap: .5rem; margin-bottom: .25rem; }
+.task-group.g-late h2 { color: var(--danger); }
+.task-group.g-late .badge { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.items.tasks li { align-items: flex-start; }
+.items.tasks li:last-child { border-bottom: 0; }
+.items.tasks input[type=checkbox] { margin-top: .1rem; flex: none; }
+.items.tasks .name { min-width: 0; }
+.items.tasks li.done .task-title { text-decoration: line-through; color: var(--muted); }
+.items.tasks li.done .name { text-decoration: none; }
+.items.tasks .avatar { width: 1.6rem; height: 1.6rem; font-size: .7rem; flex: none; }
+.task-title { overflow-wrap: anywhere; }
+.task-title .prio { display: inline-flex; align-items: center; justify-content: center; width: 1.1rem; height: 1.1rem; border-radius: 50%; background: var(--danger); color: #fff; font-size: .72rem; font-weight: 700; margin-right: .4rem; vertical-align: .1rem; }
+.items.tasks li.p-low .task-title { color: var(--muted); }
+.task-meta { display: flex; flex-wrap: wrap; gap: .15rem .75rem; font-size: .8rem; color: var(--muted); margin-top: .15rem; }
+.task-meta .due.late { color: var(--danger); font-weight: 600; }
+.task-meta .notes { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast .btn.sm { margin-left: .5rem; background: transparent; color: inherit; border-color: currentColor; }
+@media (max-width: 760px) {
+  .page-head .seg button { padding: .4rem .65rem; }
+  .task-add .btn.primary { flex: none; }
+}
