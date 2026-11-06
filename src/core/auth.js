@@ -1,47 +1,47 @@
 import crypto from 'node:crypto';
+import { NOW } from './db.js';
 
 export const TOKEN_PREFIX = 'fp_';
 
 export const coreMigrations = [
   `CREATE TABLE users (
-     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     id SERIAL PRIMARY KEY,
      name TEXT NOT NULL UNIQUE,
      color TEXT NOT NULL DEFAULT '#4f7cff',
      is_admin INTEGER NOT NULL DEFAULT 0,
      settings TEXT NOT NULL DEFAULT '{}',
-     created_at TEXT NOT NULL DEFAULT (datetime('now')));
+     created_at TEXT NOT NULL DEFAULT (${NOW}));
    CREATE TABLE tokens (
-     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     id SERIAL PRIMARY KEY,
      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
      name TEXT NOT NULL,
      token_hash TEXT NOT NULL UNIQUE,
      hint TEXT NOT NULL,
      last_used_at TEXT,
-     created_at TEXT NOT NULL DEFAULT (datetime('now')));`,
+     created_at TEXT NOT NULL DEFAULT (${NOW}));`,
 ];
 
 export const hashToken = (t) => crypto.createHash('sha256').update(t).digest('hex');
 
 /** Crea un token nuevo para un usuario. Devuelve el token en claro (solo se muestra una vez). */
-export function createToken(db, userId, name = 'web') {
+export async function createToken(db, userId, name = 'web') {
   const token = TOKEN_PREFIX + crypto.randomBytes(24).toString('base64url');
-  db.prepare('INSERT INTO tokens (user_id, name, token_hash, hint) VALUES (?, ?, ?, ?)')
-    .run(userId, name, hashToken(token), token.slice(-4));
+  await db.run('INSERT INTO tokens (user_id, name, token_hash, hint) VALUES (?, ?, ?, ?)',
+    userId, name, hashToken(token), token.slice(-4));
   return token;
 }
 
 export function createUser(db, { name, color, isAdmin = false }) {
-  const r = db.prepare('INSERT INTO users (name, color, is_admin) VALUES (?, COALESCE(?, \'#4f7cff\'), ?)')
-    .run(name, color ?? null, isAdmin ? 1 : 0);
-  return Number(r.lastInsertRowid);
+  return db.insert("INSERT INTO users (name, color, is_admin) VALUES (?, COALESCE(?::text, '#4f7cff'), ?)",
+    name, color ?? null, isAdmin ? 1 : 0);
 }
 
-export function findUserByToken(db, token) {
+export async function findUserByToken(db, token) {
   if (!token || !token.startsWith(TOKEN_PREFIX)) return null;
-  const row = db.prepare(`SELECT u.*, t.id AS token_id FROM tokens t JOIN users u ON u.id = t.user_id
-                          WHERE t.token_hash = ?`).get(hashToken(token));
+  const row = await db.get(`SELECT u.*, t.id AS token_id FROM tokens t JOIN users u ON u.id = t.user_id
+                            WHERE t.token_hash = ?`, hashToken(token));
   if (!row) return null;
-  db.prepare("UPDATE tokens SET last_used_at = datetime('now') WHERE id = ?").run(row.token_id);
+  await db.run(`UPDATE tokens SET last_used_at = ${NOW} WHERE id = ?`, row.token_id);
   return publicUser(row);
 }
 
@@ -59,8 +59,8 @@ export function extractToken(req) {
 }
 
 export function authMiddleware(db) {
-  return (req, res, next) => {
-    const user = findUserByToken(db, extractToken(req));
+  return async (req, res, next) => {
+    const user = await findUserByToken(db, extractToken(req));
     if (!user) return res.status(401).json({ ok: false, error: 'Token no válido o ausente' });
     req.user = user;
     next();

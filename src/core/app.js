@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { migrate } from './db.js';
+import { migrateAll } from './db.js';
 import { coreMigrations, authMiddleware, requireAdmin, createToken, createUser, publicUser } from './auth.js';
 import { HttpError, bad, input, intId, notFound } from './http.js';
 import { buildICS } from '../lib/ics.js';
@@ -10,14 +10,13 @@ import { modules as defaultModules } from '../modules/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export function createApp(db, { modules = defaultModules } = {}) {
-  migrate(db, 'core', coreMigrations);
+export async function createApp(db, { modules = defaultModules } = {}) {
+  await migrateAll(db, [['core', coreMigrations], ...modules.map((m) => [m.id, m.migrations])]);
   const ctx = {
     db,
-    users: () => db.prepare('SELECT id, name, color, is_admin, settings FROM users ORDER BY id').all().map(publicUser),
+    users: async () => (await db.all('SELECT id, name, color, is_admin, settings FROM users ORDER BY id')).map(publicUser),
     modules,
   };
-  for (const m of modules) migrate(db, m.id, m.migrations);
 
   const app = express();
   app.disable('x-powered-by');
@@ -33,30 +32,30 @@ export function createApp(db, { modules = defaultModules } = {}) {
 
   // ---------- Usuario y tokens ----------
   api.get('/me', (req, res) => res.json(req.user));
-  api.patch('/me', (req, res) => {
+  api.patch('/me', async (req, res) => {
     const { name, color, settings } = req.body || {};
-    if (name !== undefined) db.prepare('UPDATE users SET name = ? WHERE id = ?').run(String(name).trim(), req.user.id);
-    if (color !== undefined) db.prepare('UPDATE users SET color = ? WHERE id = ?').run(String(color), req.user.id);
+    if (name !== undefined) await db.run('UPDATE users SET name = ? WHERE id = ?', String(name).trim(), req.user.id);
+    if (color !== undefined) await db.run('UPDATE users SET color = ? WHERE id = ?', String(color), req.user.id);
     if (settings !== undefined) {
       const merged = { ...req.user.settings, ...settings };
-      db.prepare('UPDATE users SET settings = ? WHERE id = ?').run(JSON.stringify(merged), req.user.id);
+      await db.run('UPDATE users SET settings = ? WHERE id = ?', JSON.stringify(merged), req.user.id);
     }
-    res.json(publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)));
+    res.json(publicUser(await db.get('SELECT * FROM users WHERE id = ?', req.user.id)));
   });
 
-  api.get('/users', (req, res) => res.json(ctx.users()));
-  api.post('/users', requireAdmin, (req, res) => {
+  api.get('/users', async (req, res) => res.json(await ctx.users()));
+  api.post('/users', requireAdmin, async (req, res) => {
     const { name, color, isAdmin } = req.body || {};
     if (!name?.trim()) throw bad('Falta el nombre');
-    if (db.prepare('SELECT 1 FROM users WHERE name = ?').get(name.trim())) throw bad('Ya existe un usuario con ese nombre');
-    const id = createUser(db, { name: name.trim(), color, isAdmin });
-    const token = createToken(db, id, 'inicial');
-    res.status(201).json({ user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)), token });
+    if (await db.get('SELECT 1 FROM users WHERE name = ?', name.trim())) throw bad('Ya existe un usuario con ese nombre');
+    const id = await createUser(db, { name: name.trim(), color, isAdmin });
+    const token = await createToken(db, id, 'inicial');
+    res.status(201).json({ user: publicUser(await db.get('SELECT * FROM users WHERE id = ?', id)), token });
   });
-  api.delete('/users/:id', requireAdmin, (req, res) => {
+  api.delete('/users/:id', requireAdmin, async (req, res) => {
     const id = intId(req.params.id);
     if (id === req.user.id) throw bad('No puedes eliminarte a ti mismo');
-    db.prepare('DELETE FROM users WHERE id = ?').run(id);
+    await db.run('DELETE FROM users WHERE id = ?', id);
     res.json({ ok: true });
   });
 
@@ -65,22 +64,22 @@ export function createApp(db, { modules = defaultModules } = {}) {
     if (!req.user.isAdmin) throw new HttpError(403, 'Solo administradores');
     return intId(userId);
   };
-  api.get('/tokens', (req, res) => {
+  api.get('/tokens', async (req, res) => {
     const uid = tokenOwner(req, req.query.userId);
-    res.json(db.prepare('SELECT id, name, hint, last_used_at, created_at FROM tokens WHERE user_id = ? ORDER BY id').all(uid)
+    res.json((await db.all('SELECT id, name, hint, last_used_at, created_at FROM tokens WHERE user_id = ? ORDER BY id', uid))
       .map((t) => ({ ...t, current: t.id === req.user.tokenId })));
   });
-  api.post('/tokens', (req, res) => {
+  api.post('/tokens', async (req, res) => {
     const uid = tokenOwner(req, req.body?.userId);
-    const token = createToken(db, uid, String(req.body?.name || 'token').slice(0, 60));
+    const token = await createToken(db, uid, String(req.body?.name || 'token').slice(0, 60));
     res.status(201).json({ token });
   });
-  api.delete('/tokens/:id', (req, res) => {
+  api.delete('/tokens/:id', async (req, res) => {
     const id = intId(req.params.id);
-    const t = db.prepare('SELECT user_id FROM tokens WHERE id = ?').get(id);
+    const t = await db.get('SELECT user_id FROM tokens WHERE id = ?', id);
     if (!t) throw notFound();
     if (t.user_id !== req.user.id && !req.user.isAdmin) throw new HttpError(403, 'No permitido');
-    db.prepare('DELETE FROM tokens WHERE id = ?').run(id);
+    await db.run('DELETE FROM tokens WHERE id = ?', id);
     res.json({ ok: true });
   });
 
@@ -97,26 +96,28 @@ export function createApp(db, { modules = defaultModules } = {}) {
     const wanted = req.query.sources ? String(req.query.sources).split(',') : null;
     return wanted ? all.filter((m) => wanted.includes(m.id)) : all;
   };
-  api.get('/calendar', (req, res) => {
+  api.get('/calendar', async (req, res) => {
     const from = req.query.from || today();
     const to = req.query.to || fmtDate(addDays(toUTC(from), 41));
     if (!isDate(from) || !isDate(to)) throw bad('from/to deben ser YYYY-MM-DD');
     if (toUTC(to) - toUTC(from) > 400 * 864e5) throw bad('Rango demasiado grande (máx. 400 días)');
-    const items = calendarSources(req).flatMap((m) =>
-      m.calendar.fetch(ctx, { from, to, user: req.user }).map((it) => ({
+    const perSource = await Promise.all(calendarSources(req).map(async (m) =>
+      (await m.calendar.fetch(ctx, { from, to, user: req.user })).map((it) => ({
         color: m.calendar.color, ...it, source: m.id, sourceLabel: m.calendar.label,
-      })));
+      }))));
+    const items = perSource.flat();
     items.sort((a, b) => a.start.localeCompare(b.start) || (b.allDay ? 1 : 0) - (a.allDay ? 1 : 0));
     res.json(items);
   });
-  api.get('/calendar.ics', (req, res) => {
-    const items = calendarSources(req).flatMap((m) => (m.calendar.ics ? m.calendar.ics(ctx, { user: req.user }) : []));
+  api.get('/calendar.ics', async (req, res) => {
+    const items = (await Promise.all(calendarSources(req).map((m) => (m.calendar.ics ? m.calendar.ics(ctx, { user: req.user }) : [])))).flat();
     res.type('text/calendar; charset=utf-8').send(buildICS(items, { name: 'FamilyPro' }));
   });
 
   // ---------- Resumen para el panel ----------
-  api.get('/dashboard', (req, res) => {
-    res.json(modules.filter((m) => m.summary).map((m) => ({ module: m.id, icon: m.icon, ...m.summary(ctx, req.user) })));
+  api.get('/dashboard', async (req, res) => {
+    res.json(await Promise.all(modules.filter((m) => m.summary)
+      .map(async (m) => ({ module: m.id, icon: m.icon, ...(await m.summary(ctx, req.user)) }))));
   });
 
   // ---------- Acciones rápidas (atajos de iPhone / Siri / Wallet) ----------

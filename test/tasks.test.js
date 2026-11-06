@@ -10,12 +10,12 @@ process.env.TZ = 'Europe/Madrid';
 let base, token, token2, ana, luis, server;
 
 before(async () => {
-  const db = openDb(':memory:');
-  const app = createApp(db);
-  ana = createUser(db, { name: 'Ana', isAdmin: true });
-  luis = createUser(db, { name: 'Luis' });
-  token = createToken(db, ana);
-  token2 = createToken(db, luis);
+  const db = await openDb('memory://');
+  const app = await createApp(db);
+  ana = await createUser(db, { name: 'Ana', isAdmin: true });
+  luis = await createUser(db, { name: 'Luis' });
+  token = await createToken(db, ana);
+  token2 = await createToken(db, luis);
   server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
 });

@@ -11,11 +11,11 @@ process.env.TZ = 'Europe/Madrid';
 let base, token, token2, server;
 
 before(async () => {
-  const db = openDb(':memory:');
-  const app = createApp(db);
-  const admin = createUser(db, { name: 'Ana', isAdmin: true });
-  token = createToken(db, admin);
-  token2 = createToken(db, createUser(db, { name: 'Luis' }));
+  const db = await openDb('memory://');
+  const app = await createApp(db);
+  const admin = await createUser(db, { name: 'Ana', isAdmin: true });
+  token = await createToken(db, admin);
+  token2 = await createToken(db, await createUser(db, { name: 'Luis' }));
   server = await new Promise((r) => { const s = app.listen(0, () => r(s)); });
   base = `http://127.0.0.1:${server.address().port}`;
 });

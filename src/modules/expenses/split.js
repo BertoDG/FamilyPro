@@ -2,23 +2,24 @@
 // Todo se calcula en céntimos enteros. Los céntimos sobrantes se reparten por el método del mayor resto
 // (a igualdad de resto, primero el id de usuario más bajo), así el resultado es siempre el mismo.
 import { bad, intId, notFound } from '../../core/http.js';
+import { NOW } from '../../core/db.js';
 import { parseAmountToCents, formatEuros } from '../../lib/parse.js';
 import { isDate } from '../../lib/dates.js';
 
 /** Migración: columna shared, partes personalizadas, liquidaciones y ajustes del reparto. */
-export function splitMigration(db) {
-  db.exec(`ALTER TABLE expenses ADD COLUMN shared INTEGER NOT NULL DEFAULT 1;
+export async function splitMigration(db) {
+  await db.exec(`ALTER TABLE expenses ADD COLUMN shared INTEGER NOT NULL DEFAULT 1;
     CREATE TABLE expense_splits (
       expense_id INTEGER NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      amount_cents INTEGER, weight REAL,
+      amount_cents INTEGER, weight DOUBLE PRECISION,
       PRIMARY KEY (expense_id, user_id));
     CREATE TABLE expense_settlements (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      id SERIAL PRIMARY KEY,
       from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       to_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       amount_cents INTEGER NOT NULL, date TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '',
-      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')));
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TEXT NOT NULL DEFAULT (${NOW}));
     CREATE INDEX idx_settlements_date ON expense_settlements(date);
     CREATE TABLE expense_split_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`);
 }
@@ -67,8 +68,8 @@ export function allocate(total, entries) {
 
 // ---------- Ajustes (proporción por defecto) ----------
 
-export function getSettings(db) {
-  const row = db.prepare("SELECT value FROM expense_split_settings WHERE key = 'default'").get();
+export async function getSettings(db) {
+  const row = await db.get("SELECT value FROM expense_split_settings WHERE key = 'default'");
   let s = {};
   try { s = JSON.parse(row?.value || '{}'); } catch { /* ignore */ }
   return { mode: s.mode === 'weights' ? 'weights' : 'equal', weights: s.weights && typeof s.weights === 'object' ? s.weights : {} };
@@ -83,9 +84,9 @@ export function defaultEntries(settings, users) {
   return users.map((u) => ({ userId: u.id, weight: 1 }));
 }
 
-function publicSettings(db) {
-  const s = getSettings(db);
-  const users = db.prepare('SELECT id, name, color FROM users ORDER BY id').all();
+async function publicSettings(db) {
+  const s = await getSettings(db);
+  const users = await db.all('SELECT id, name, color FROM users ORDER BY id');
   const entries = defaultEntries(s, users);
   const W = entries.reduce((a, e) => a + e.weight, 0);
   return {
@@ -97,19 +98,22 @@ function publicSettings(db) {
   };
 }
 
-function saveSettings(db, body = {}) {
+const userIds = async (db) => new Set((await db.all('SELECT id FROM users')).map((u) => u.id));
+
+async function saveSettings(db, body = {}) {
   const mode = body.mode === 'weights' ? 'weights' : 'equal';
   const weights = {};
+  const ids = await userIds(db);
   const src = Array.isArray(body.weights) ? body.weights.map((w) => [w.userId ?? w.id, w.weight ?? w.percent]) : Object.entries(body.weights || {});
   for (const [uid, w] of src) {
     const id = Number(uid), n = Number(String(w ?? '').replace(',', '.'));
-    if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM users WHERE id = ?').get(id)) continue;
+    if (!Number.isInteger(id) || !ids.has(id)) continue;
     if (!Number.isFinite(n) || n < 0) throw bad('Los pesos deben ser números positivos');
     weights[id] = n;
   }
   if (mode === 'weights' && !Object.values(weights).some((w) => w > 0)) throw bad('Indica al menos un peso mayor que cero');
-  db.prepare("INSERT INTO expense_split_settings (key, value) VALUES ('default', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
-    .run(JSON.stringify({ mode, weights }));
+  await db.run("INSERT INTO expense_split_settings (key, value) VALUES ('default', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    JSON.stringify({ mode, weights }));
 }
 
 // ---------- Partes de cada gasto ----------
@@ -119,16 +123,17 @@ function saveSettings(db, body = {}) {
  * Acepta [{ userId, amount }] (importes), [{ userId, weight }] o [{ userId, percent }] (pesos).
  * Devuelve null si no hay reparto personalizado (usa la proporción por defecto).
  */
-export function normalizeSplits(db, splits) {
+export async function normalizeSplits(db, splits) {
   if (splits === undefined || splits === null || splits === '' || splits === false) return null;
   if (typeof splits === 'string') { try { splits = JSON.parse(splits); } catch { throw bad('Reparto no válido'); } }
   if (!Array.isArray(splits)) throw bad('splits debe ser una lista');
   if (!splits.length) return null;
+  const ids = await userIds(db);
   const out = [];
   let kind = null;
   for (const s of splits) {
     const id = Number(s?.userId ?? s?.user_id ?? s?.user ?? s?.id);
-    if (!Number.isInteger(id) || !db.prepare('SELECT 1 FROM users WHERE id = ?').get(id)) throw bad('Miembro del reparto no válido');
+    if (!Number.isInteger(id) || !ids.has(id)) throw bad('Miembro del reparto no válido');
     if (out.some((x) => x.user_id === id)) throw bad('Miembro repetido en el reparto');
     let k, amount = null, weight = null;
     if (s.amount !== undefined || s.amount_cents !== undefined || s.cents !== undefined) {
@@ -148,16 +153,17 @@ export function normalizeSplits(db, splits) {
   return out;
 }
 
-export function saveSplits(db, expenseId, splits) {
-  db.prepare('DELETE FROM expense_splits WHERE expense_id = ?').run(expenseId);
-  const ins = db.prepare('INSERT INTO expense_splits (expense_id, user_id, amount_cents, weight) VALUES (?, ?, ?, ?)');
-  for (const s of splits || []) ins.run(expenseId, s.user_id, s.amount_cents, s.weight);
+export async function saveSplits(db, expenseId, splits) {
+  await db.run('DELETE FROM expense_splits WHERE expense_id = ?', expenseId);
+  for (const s of splits || []) {
+    await db.run('INSERT INTO expense_splits (expense_id, user_id, amount_cents, weight) VALUES (?, ?, ?, ?)', expenseId, s.user_id, s.amount_cents, s.weight);
+  }
 }
 
 /** Comprueba que un reparto por importes suma exactamente el total del gasto. */
-export function checkSplitTotal(db, expenseId) {
-  const e = db.prepare('SELECT amount_cents, shared FROM expenses WHERE id = ?').get(expenseId);
-  const rows = db.prepare('SELECT amount_cents FROM expense_splits WHERE expense_id = ?').all(expenseId);
+export async function checkSplitTotal(db, expenseId) {
+  const e = await db.get('SELECT amount_cents, shared FROM expenses WHERE id = ?', expenseId);
+  const rows = await db.all('SELECT amount_cents FROM expense_splits WHERE expense_id = ?', expenseId);
   if (!e || !e.shared || !rows.length || rows.some((r) => r.amount_cents === null)) return;
   const sum = rows.reduce((s, r) => s + r.amount_cents, 0);
   if (sum !== e.amount_cents) throw bad(`El reparto suma ${formatEuros(sum)} y el gasto es de ${formatEuros(e.amount_cents)}`);
@@ -177,26 +183,26 @@ export function expenseShares(e, splits, defaults) {
   return allocate(e.amount_cents, defaults);
 }
 
-function splitContext(db) {
-  const users = db.prepare('SELECT id, name, color FROM users ORDER BY id').all();
-  return { users, defaults: defaultEntries(getSettings(db), users) };
+async function splitContext(db) {
+  const users = await db.all('SELECT id, name, color FROM users ORDER BY id');
+  return { users, defaults: defaultEntries(await getSettings(db), users) };
 }
 
-function splitsFor(db, ids) {
+async function splitsFor(db, ids) {
   const map = new Map();
   if (!ids.length) return map;
-  const rows = db.prepare(`SELECT s.*, u.name AS user_name FROM expense_splits s JOIN users u ON u.id = s.user_id
-    WHERE s.expense_id IN (${ids.map(() => '?').join(',')}) ORDER BY s.user_id`).all(...ids);
+  const rows = await db.all(`SELECT s.*, u.name AS user_name FROM expense_splits s JOIN users u ON u.id = s.user_id
+    WHERE s.expense_id IN (${ids.map(() => '?').join(',')}) ORDER BY s.user_id`, ...ids);
   for (const r of rows) { if (!map.has(r.expense_id)) map.set(r.expense_id, []); map.get(r.expense_id).push(r); }
   return map;
 }
 
 /** Añade `splits` (reparto personalizado guardado) y `shares` (parte de cada uno) a filas de gastos. */
-export function attachSplits(db, rows) {
+export async function attachSplits(db, rows) {
   const list = Array.isArray(rows) ? rows : [rows];
   if (!list.length || !list[0]) return rows;
-  const { defaults } = splitContext(db);
-  const map = splitsFor(db, list.map((e) => e.id));
+  const { defaults } = await splitContext(db);
+  const map = await splitsFor(db, list.map((e) => e.id));
   for (const e of list) {
     const splits = map.get(e.id) || [];
     e.splits = splits.map((s) => ({ userId: s.user_id, name: s.user_name, amount_cents: s.amount_cents, weight: s.weight }));
@@ -206,10 +212,10 @@ export function attachSplits(db, rows) {
 }
 
 /** Parte de cada usuario en un rango (compartida + personal) para el resumen mensual. */
-export function sharesByUser(db, from, to) {
-  const { defaults } = splitContext(db);
-  const rows = db.prepare('SELECT id, amount_cents, paid_by, shared FROM expenses WHERE date BETWEEN ? AND ?').all(from, to);
-  const map = splitsFor(db, rows.map((e) => e.id));
+export async function sharesByUser(db, from, to) {
+  const { defaults } = await splitContext(db);
+  const rows = await db.all('SELECT id, amount_cents, paid_by, shared FROM expenses WHERE date BETWEEN ? AND ?', from, to);
+  const map = await splitsFor(db, rows.map((e) => e.id));
   const out = new Map();
   const add = (id, k, v) => { if (!out.has(id)) out.set(id, { share: 0, personal: 0 }); out.get(id)[k] += v; };
   for (const e of rows) {
@@ -239,17 +245,17 @@ export function simplifyDebts(nets) {
   return out;
 }
 
-export function balances(db, { from, to } = {}) {
+export async function balances(db, { from, to } = {}) {
   if (from && !isDate(from)) throw bad('from debe ser YYYY-MM-DD');
   if (to && !isDate(to)) throw bad('to debe ser YYYY-MM-DD');
-  const { users, defaults } = splitContext(db);
+  const { users, defaults } = await splitContext(db);
   const where = [], args = [];
   if (from) { where.push('date >= ?'); args.push(from); }
   if (to) { where.push('date <= ?'); args.push(to); }
   const w = where.length ? `AND ${where.join(' AND ')}` : '';
-  const expenses = db.prepare(`SELECT id, amount_cents, paid_by, shared FROM expenses WHERE shared = 1 AND paid_by IS NOT NULL ${w}`).all(...args);
-  const settlements = db.prepare(`SELECT from_user, to_user, amount_cents FROM expense_settlements WHERE 1 = 1 ${w}`).all(...args);
-  const map = splitsFor(db, expenses.map((e) => e.id));
+  const expenses = await db.all(`SELECT id, amount_cents, paid_by, shared FROM expenses WHERE shared = 1 AND paid_by IS NOT NULL ${w}`, ...args);
+  const settlements = await db.all(`SELECT from_user, to_user, amount_cents FROM expense_settlements WHERE 1 = 1 ${w}`, ...args);
+  const map = await splitsFor(db, expenses.map((e) => e.id));
   const acc = new Map(users.map((u) => [u.id, { id: u.id, name: u.name, color: u.color, paid: 0, share: 0, sent: 0, received: 0, net: 0 }]));
   let totalShared = 0;
   for (const e of expenses) {
@@ -274,22 +280,22 @@ export function balanceMessage(b) {
 
 // ---------- Liquidaciones ----------
 
-const getSettlement = (db, id) => db.prepare(`SELECT s.*, f.name AS from_name, t.name AS to_name FROM expense_settlements s
-  JOIN users f ON f.id = s.from_user JOIN users t ON t.id = s.to_user WHERE s.id = ?`).get(id);
+const getSettlement = (db, id) => db.get(`SELECT s.*, f.name AS from_name, t.name AS to_name FROM expense_settlements s
+  JOIN users f ON f.id = s.from_user JOIN users t ON t.id = s.to_user WHERE s.id = ?`, id);
 
-function userId(db, v) {
+async function userId(db, v) {
   if (v === undefined || v === null || v === '') return null;
-  const u = db.prepare('SELECT id FROM users WHERE id = ? OR lower(name) = lower(?)').get(Number(v) || -1, String(v));
+  const u = await db.get('SELECT id FROM users WHERE id = ? OR lower(name) = lower(?::text)', Number.isInteger(Number(v)) ? Number(v) : -1, String(v));
   if (!u) throw bad('Miembro no encontrado');
   return u.id;
 }
 
-function settlementFields(db, b, current = {}) {
+async function settlementFields(db, b, current = {}) {
   const from = b.from ?? b.fromUserId ?? b.from_user;
   const to = b.to ?? b.toUserId ?? b.to_user;
   const out = {
-    from_user: from !== undefined ? userId(db, from) : current.from_user,
-    to_user: to !== undefined ? userId(db, to) : current.to_user,
+    from_user: from !== undefined ? await userId(db, from) : current.from_user,
+    to_user: to !== undefined ? await userId(db, to) : current.to_user,
     amount_cents: current.amount_cents, date: current.date, notes: current.notes ?? '',
   };
   if (b.amount !== undefined || b.amount_cents !== undefined) {
@@ -312,53 +318,53 @@ function settlementFields(db, b, current = {}) {
 
 /** Rutas del reparto. Se registran antes de /:id para que no las capture. */
 export function splitRoutes(r, db, { today }) {
-  r.get('/balances', (req, res) => res.json(balances(db, { from: req.query.from, to: req.query.to })));
+  r.get('/balances', async (req, res) => res.json(await balances(db, { from: req.query.from, to: req.query.to })));
 
-  r.get('/split-settings', (req, res) => res.json(publicSettings(db)));
-  r.put('/split-settings', (req, res) => { saveSettings(db, req.body); res.json(publicSettings(db)); });
+  r.get('/split-settings', async (req, res) => res.json(await publicSettings(db)));
+  r.put('/split-settings', async (req, res) => { await saveSettings(db, req.body); res.json(await publicSettings(db)); });
 
-  r.get('/settlements', (req, res) => {
+  r.get('/settlements', async (req, res) => {
     const { from, to } = req.query;
     const where = [], args = [];
     if (from) { if (!isDate(from)) throw bad('from debe ser YYYY-MM-DD'); where.push('s.date >= ?'); args.push(from); }
     if (to) { if (!isDate(to)) throw bad('to debe ser YYYY-MM-DD'); where.push('s.date <= ?'); args.push(to); }
-    res.json(db.prepare(`SELECT s.*, f.name AS from_name, t.name AS to_name FROM expense_settlements s
+    res.json(await db.all(`SELECT s.*, f.name AS from_name, t.name AS to_name FROM expense_settlements s
       JOIN users f ON f.id = s.from_user JOIN users t ON t.id = s.to_user
-      ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.date DESC, s.id DESC LIMIT 500`).all(...args));
+      ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY s.date DESC, s.id DESC LIMIT 500`, ...args));
   });
-  r.post('/settlements', (req, res) => {
+  r.post('/settlements', async (req, res) => {
     const b = req.body || {};
-    const f = settlementFields(db, b, { from_user: req.user.id, date: today() });
-    const id = Number(db.prepare('INSERT INTO expense_settlements (from_user, to_user, amount_cents, date, notes, created_by) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(f.from_user, f.to_user, f.amount_cents, f.date, f.notes, req.user.id).lastInsertRowid);
-    res.status(201).json(getSettlement(db, id));
+    const f = await settlementFields(db, b, { from_user: req.user.id, date: today() });
+    const id = await db.insert('INSERT INTO expense_settlements (from_user, to_user, amount_cents, date, notes, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      f.from_user, f.to_user, f.amount_cents, f.date, f.notes, req.user.id);
+    res.status(201).json(await getSettlement(db, id));
   });
-  r.get('/settlements/:id', (req, res) => {
-    const s = getSettlement(db, intId(req.params.id));
+  r.get('/settlements/:id', async (req, res) => {
+    const s = await getSettlement(db, intId(req.params.id));
     if (!s) throw notFound();
     res.json(s);
   });
-  r.patch('/settlements/:id', (req, res) => {
+  r.patch('/settlements/:id', async (req, res) => {
     const id = intId(req.params.id);
-    const cur = getSettlement(db, id);
+    const cur = await getSettlement(db, id);
     if (!cur) throw notFound();
-    const f = settlementFields(db, req.body || {}, cur);
-    db.prepare('UPDATE expense_settlements SET from_user = ?, to_user = ?, amount_cents = ?, date = ?, notes = ? WHERE id = ?')
-      .run(f.from_user, f.to_user, f.amount_cents, f.date, f.notes, id);
-    res.json(getSettlement(db, id));
+    const f = await settlementFields(db, req.body || {}, cur);
+    await db.run('UPDATE expense_settlements SET from_user = ?, to_user = ?, amount_cents = ?, date = ?, notes = ? WHERE id = ?',
+      f.from_user, f.to_user, f.amount_cents, f.date, f.notes, id);
+    res.json(await getSettlement(db, id));
   });
-  r.delete('/settlements/:id', (req, res) => {
-    db.prepare('DELETE FROM expense_settlements WHERE id = ?').run(intId(req.params.id));
+  r.delete('/settlements/:id', async (req, res) => {
+    await db.run('DELETE FROM expense_settlements WHERE id = ?', intId(req.params.id));
     res.json({ ok: true });
   });
 }
 
 /** Aplica shared/personal y splits de un cuerpo de petición a un gasto (dentro de una transacción). */
-export function applySplitInput(db, expenseId, data, { isNew = false } = {}) {
+export async function applySplitInput(db, expenseId, data, { isNew = false } = {}) {
   const shared = sharedFromInput(data);
-  if (shared !== undefined) db.prepare('UPDATE expenses SET shared = ? WHERE id = ?').run(shared, expenseId);
-  const isShared = db.prepare('SELECT shared FROM expenses WHERE id = ?').get(expenseId)?.shared;
-  if (!isShared) saveSplits(db, expenseId, []);
-  else if (data.splits !== undefined) saveSplits(db, expenseId, normalizeSplits(db, data.splits));
-  if (!isNew || data.splits !== undefined) checkSplitTotal(db, expenseId);
+  if (shared !== undefined) await db.run('UPDATE expenses SET shared = ? WHERE id = ?', shared, expenseId);
+  const isShared = (await db.get('SELECT shared FROM expenses WHERE id = ?', expenseId))?.shared;
+  if (!isShared) await saveSplits(db, expenseId, []);
+  else if (data.splits !== undefined) await saveSplits(db, expenseId, await normalizeSplits(db, data.splits));
+  if (!isNew || data.splits !== undefined) await checkSplitTotal(db, expenseId);
 }

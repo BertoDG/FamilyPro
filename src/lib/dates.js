@@ -22,12 +22,21 @@ export function addMonthsStrict(d, n) {
   return r.getUTCDate() === d.getUTCDate() ? r : null;
 }
 
-/** Fecha de hoy en la zona horaria configurada (TZ). */
-export function today(tz = process.env.TZ || 'Europe/Madrid') {
+/**
+ * Zona horaria de la casa. APP_TZ tiene prioridad porque en Vercel la variable TZ está reservada (siempre UTC).
+ * Un TZ con formato raro (":UTC", ":/etc/localtime") se ignora.
+ */
+export function appTz() {
+  const tz = process.env.APP_TZ || (process.env.TZ && !process.env.TZ.startsWith(':') && process.env.TZ !== 'UTC' ? process.env.TZ : '');
+  return tz || 'Europe/Madrid';
+}
+
+/** Fecha de hoy en la zona horaria de la casa. */
+export function today(tz = appTz()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
 }
 
-export function nowLocal(tz = process.env.TZ || 'Europe/Madrid') {
+export function nowLocal(tz = appTz()) {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
   }).formatToParts(new Date()).map((x) => [x.type, x.value]));

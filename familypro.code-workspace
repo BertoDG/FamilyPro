@@ -1,0 +1,25 @@
+{
+  "folders": [
+    { "name": "FamilyPro", "path": "." }
+  ],
+  "settings": {
+    "files.eol": "\n",
+    "editor.tabSize": 2,
+    "files.exclude": {
+      "**/node_modules": true
+    }
+  },
+  "launch": {
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "type": "node",
+        "request": "launch",
+        "name": "FamilyPro: servidor",
+        "program": "${workspaceFolder}/src/server.js",
+        "runtimeArgs": ["--disable-warning=ExperimentalWarning"],
+        "console": "integratedTerminal"
+      }
+    ]
+  }
+}
